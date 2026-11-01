@@ -1,6 +1,5 @@
 
 import Stripe from "stripe";
-import mongoose from "mongoose";
 import Booking from "../models/Booking.js";
 import { inngest } from "../inngest/index.js";
 
@@ -41,45 +40,7 @@ const processSuccessfulPayment = async (session) => {
         };
     }
 
-    // ========================================================
-    // MONGODB DIAGNOSTICS
-    // ========================================================
-
-    console.log("========== PAYMENT DIAGNOSTICS ==========");
-    console.log("Stripe Event Session:", session.id);
-    console.log("Stripe Payment Status:", session.payment_status);
-    console.log("Metadata Booking ID:", bookingId);
-    console.log("Connected Database:", mongoose.connection.name);
-    console.log("Connected Host:", mongoose.connection.host);
-    console.log("Booking Collection:", Booking.collection.name);
-    console.log("MongoDB Connection State:", mongoose.connection.readyState);
-
-    let directLookup = null;
-
-    if (mongoose.Types.ObjectId.isValid(bookingId)) {
-        directLookup = await Booking.collection.findOne({
-            _id: new mongoose.Types.ObjectId(bookingId)
-        });
-    }
-
-    console.log(
-        "Direct MongoDB Lookup:",
-        directLookup ? "BOOKING FOUND" : "BOOKING NOT FOUND"
-    );
-
-    if (directLookup) {
-        console.log("Direct Lookup Booking ID:", directLookup._id.toString());
-        console.log("Direct Lookup Payment Status:", directLookup.isPaid);
-        console.log("Direct Lookup Booking Status:", directLookup.status);
-        console.log("Direct Lookup Amount:", directLookup.amount);
-    }
-
-    console.log("=========================================");
-
-    // ========================================================
-    // FIND BOOKING
-    // ========================================================
-
+    // Find booking
     const booking = await Booking.findById(bookingId);
 
     if (!booking) {
@@ -92,9 +53,6 @@ const processSuccessfulPayment = async (session) => {
             `Booking not found: ${bookingId}`
         );
     }
-
-    console.log("Mongoose Booking Lookup: SUCCESS");
-    console.log("Found Booking:", booking._id.toString());
 
     // Verify that this is the expected Stripe session.
     if (
@@ -153,7 +111,9 @@ export const stripeWebhooks = async (req, res) => {
 
     // Check Stripe configuration
     if (!stripe) {
-        console.error("Stripe secret key is missing.");
+        console.error(
+            "Stripe secret key is missing."
+        );
 
         return res.status(500).send(
             "Stripe is not configured."
@@ -161,7 +121,9 @@ export const stripeWebhooks = async (req, res) => {
     }
 
     if (!process.env.STRIPE_WEBHOOK_SECRET) {
-        console.error("Stripe webhook secret is missing.");
+        console.error(
+            "Stripe webhook secret is missing."
+        );
 
         return res.status(500).send(
             "Stripe webhook is not configured."
@@ -271,7 +233,7 @@ export const stripeWebhooks = async (req, res) => {
                 );
 
                 // Do not mark the booking as paid.
-                // Existing expiry workflow can release seats.
+                // Your existing expiry workflow can release seats.
 
                 break;
             }
@@ -288,7 +250,8 @@ export const stripeWebhooks = async (req, res) => {
                     session.id
                 );
 
-                // Preserve existing booking expiry workflow.
+                // Do not change payment status here.
+                // Preserve your existing booking expiry workflow.
 
                 break;
             }
@@ -315,6 +278,7 @@ export const stripeWebhooks = async (req, res) => {
             error
         );
 
+        // Stripe retries webhook events after a server error.
         return res.status(500).json({
             received: false,
             message: "Webhook processing failed."
