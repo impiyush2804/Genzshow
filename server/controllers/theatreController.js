@@ -1,4 +1,4 @@
-import Theatre from "../models/Theatre.js";
+import Theatre from "../models/theatre.js";
 import Show from "../models/Show.js";
 
 export const getTheatres = async (req, res) => {
