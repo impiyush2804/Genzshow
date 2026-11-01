@@ -1,67 +1,112 @@
+
+import "dotenv/config";
+
 import express from "express";
 import cors from "cors";
-import "dotenv/config";
+import { clerkMiddleware } from "@clerk/express";
+import { serve } from "inngest/express";
 
 import connectDB from "./configs/db.js";
 
-import { clerkMiddleware } from "@clerk/express";
-
-import { serve } from "inngest/express";
-import { inngest, functions } from "./inngest/index.js";
-
 import showRouter from "./routes/showRoutes.js";
-import bookingRouter from "./routes/bookingRoutes.js";
-import adminRouter from "./routes/adminRoutes.js";
 import userRouter from "./routes/userRoutes.js";
+import adminRouter from "./routes/adminRoutes.js";
+import bookingRouter from "./routes/bookingRoutes.js";
+import theatreRouter from "./routes/theatreRoutes.js";
+import recommendationRouter from "./routes/recommendationRoutes.js";
+import movieDNARouter from "./routes/movieDNARoutes.js";
 
-import { stripeWebhooks } from "./controllers/stripeWebhooks.js";
+import { stripeWebhooks } from "./controllers/stripeWebhookController.js";
+import { inngest, functions } from "./inngest/index.js";
 
 const app = express();
 
-const port = process.env.PORT || 3000;
+const PORT = process.env.PORT || 3000;
 
-// ===============================
-// Database Connection
-// ===============================
-await connectDB();
-
-// ===============================
-// Stripe Webhook
-// IMPORTANT: Must come before express.json()
-// ===============================
-app.use(
-    "/api/stripe",
-    express.raw({ type: "application/json" }),
-    stripeWebhooks
-);
-
-// ===============================
-// Middleware
-// ===============================
-app.use(express.json());
+// ============================================================
+// CORS
+// ============================================================
 
 app.use(
     cors({
-        origin: true,
+        origin: [
+            "http://localhost:5173",
+            "http://127.0.0.1:5173",
+            process.env.FRONTEND_URL,
+        ].filter(Boolean),
+
         credentials: true,
+
+        methods: [
+            "GET",
+            "POST",
+            "PUT",
+            "PATCH",
+            "DELETE",
+            "OPTIONS",
+        ],
+
+        allowedHeaders: [
+            "Content-Type",
+            "Authorization",
+            "stripe-signature",
+        ],
     })
 );
 
-app.use(clerkMiddleware());
+// ============================================================
+// DATABASE CONNECTION MIDDLEWARE
+// Connect to MongoDB before accessing database operations.
+// Uses the cached connection from configs/db.js.
+// ============================================================
 
-// ===============================
-// Health Check
-// ===============================
-app.get("/", (req, res) => {
-    res.json({
-        success: true,
-        message: "GenZ Show Server is Live!",
-    });
+app.use(async (req, res, next) => {
+    try {
+        await connectDB();
+        next();
+    } catch (error) {
+        console.error(
+            "❌ MongoDB request connection error:",
+            error.message
+        );
+
+        return res.status(503).json({
+            success: false,
+            message: "Database temporarily unavailable",
+        });
+    }
 });
 
-// ===============================
-// API Routes
-// ===============================
+// ============================================================
+// STRIPE WEBHOOK
+// IMPORTANT: Must be before express.json().
+// Stripe requires the original raw request body.
+// ============================================================
+
+app.post(
+    "/api/stripe/webhook",
+    express.raw({
+        type: "application/json",
+    }),
+    stripeWebhooks
+);
+
+// ============================================================
+// BODY PARSERS
+// ============================================================
+
+app.use(express.json());
+
+app.use(
+    express.urlencoded({
+        extended: true,
+    })
+);
+
+// ============================================================
+// INNGEST ENDPOINT
+// ============================================================
+
 app.use(
     "/api/inngest",
     serve({
@@ -70,46 +115,103 @@ app.use(
     })
 );
 
+// ============================================================
+// CLERK MIDDLEWARE
+// ============================================================
+
+app.use(clerkMiddleware());
+
+// ============================================================
+// HEALTH CHECK
+// ============================================================
+
+app.get("/", (req, res) => {
+    return res.status(200).json({
+        success: true,
+        message: "GenZShow server is running",
+        database:
+            "MongoDB connection middleware executed",
+    });
+});
+
+// ============================================================
+// API ROUTES
+// ============================================================
+
 app.use("/api/show", showRouter);
-
-app.use("/api/booking", bookingRouter);
-
-app.use("/api/admin", adminRouter);
 
 app.use("/api/user", userRouter);
 
-// ===============================
-// 404 Handler
-// ===============================
+app.use("/api/admin", adminRouter);
+
+app.use("/api/booking", bookingRouter);
+
+app.use("/api/theatre", theatreRouter);
+
+app.use("/api/recommendation", recommendationRouter);
+
+app.use("/api/movie-dna", movieDNARouter);
+
+// ============================================================
+// 404 HANDLER
+// ============================================================
+
 app.use((req, res) => {
-    res.status(404).json({
+    return res.status(404).json({
         success: false,
-        message: "API route not found",
+        message: `Route not found: ${req.method} ${req.originalUrl}`,
     });
 });
 
-// ===============================
-// Error Handler
-// ===============================
-app.use((err, req, res, next) => {
-    console.error("SERVER ERROR:", err);
+// ============================================================
+// GLOBAL ERROR HANDLER
+// ============================================================
 
-    res.status(err.status || 500).json({
+app.use((error, req, res, next) => {
+    console.error("❌ SERVER ERROR:", error);
+
+    if (res.headersSent) {
+        return next(error);
+    }
+
+    return res.status(error?.status || 500).json({
         success: false,
-        message: err.message || "Internal Server Error",
+        message:
+            error?.message || "Internal server error",
     });
 });
 
-// ===============================
-// Local Development
-// ===============================
-if (process.env.NODE_ENV !== "production") {
-    app.listen(port, () => {
-        console.log(`Server running at http://localhost:${port}`);
-    });
-}
+// ============================================================
+// VERCEL SERVERLESS EXPORT
+// ============================================================
 
-// ===============================
-// Vercel
-// ===============================
 export default app;
+
+// ============================================================
+// LOCAL DEVELOPMENT SERVER
+// Vercel handles the exported Express application.
+// Locally, start Express normally.
+// ============================================================
+
+if (!process.env.VERCEL) {
+    const startServer = async () => {
+        try {
+            await connectDB();
+
+            app.listen(PORT, () => {
+                console.log(
+                    `🚀 GenZShow server running on http://localhost:${PORT}`
+                );
+            });
+        } catch (error) {
+            console.error(
+                "❌ Failed to start GenZShow:",
+                error
+            );
+
+            process.exitCode = 1;
+        }
+    };
+
+    startServer();
+}
